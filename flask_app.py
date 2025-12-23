@@ -12,82 +12,79 @@ app = Flask(__name__)
 
 # --- НАСТРОЙКИ ---
 CACHE_FILE = "schedule_cache.json"
-CACHE_TIME = 3600  # Кэш на 1 час
+CACHE_TIME = 3600  # Кэш на 1 час (3600 секунд)
 
-# Настройка клиента Gemini
-client = genai.Client(
-    api_key=os.environ.get("GEMINI_API_KEY"),
-)
+# Инициализация клиента Gemini
+# Обязательно добавь переменную GEMINI_API_KEY в Settings -> Environment на Render
+client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
-# Инструкция для ИИ, чтобы он видел ВСЕ группы
-SYSTEM_INSTRUCTION = """Ты — профессиональный парсер расписания. 
-Тебе дан текст из PDF-файла с заменами уроков. 
-Твоя задача: извлечь замены для ВСЕХ групп, которые упоминаются в тексте.
-Результат выдай СТРОГО в формате JSON.
+SYSTEM_INSTRUCTION = """Ты — парсер расписания колледжа. 
+Тебе дан текст из PDF. Твоя задача: найти данные о заменах для ВСЕХ групп.
+Выдавай ответ СТРОГО в формате JSON.
 
-Формат ответа:
+Формат:
 {
   "Название Группы": [
     {
       "para_num": "номер пары",
-      "subject": "название предмета и дата",
-      "teacher": "фамилия преподавателя",
+      "subject": "предмет и дата",
+      "teacher": "фамилия",
       "aud": "кабинет",
-      "time": "время начала"
+      "time": "время"
     }
   ]
 }
 
-Если для группы замен нет, не включай её в список. Если данных вообще нет, верни {}. 
-Не пиши ничего, кроме чистого JSON."""
+Если замен нет, верни {}. Не пиши ничего, кроме JSON."""
 
 def get_pdf_text():
+    """Скачивает PDF и извлекает текст"""
     url = "https://cloud.nntc.nnov.ru/index.php/s/fYpXD39YccFB5gM/download"
-    response = requests.get(url)
-    # Используем pdfplumber для качественного извлечения таблиц
+    response = requests.get(url, timeout=10)
     with pdfplumber.open(io.BytesIO(response.content)) as pdf:
-        text = ""
-        for page in pdf.pages:
-            text += page.extract_text() + "\n"
-    return text
+        return "\n".join([page.extract_text() for page in pdf.pages if page.extract_text()])
 
 @app.route('/get_schedule', methods=['GET'])
 def get_schedule():
     target_group = request.args.get('group')
     
-    # 1. Проверяем кэш (чтобы не тратить лимиты)
+    # 1. Пробуем взять данные из кэша
     if os.path.exists(CACHE_FILE):
         file_age = time.time() - os.path.getmtime(CACHE_FILE)
         if file_age < CACHE_TIME:
-            with open(CACHE_FILE, 'r', encoding='utf-8') as f:
-                full_schedule = json.load(f)
-                if target_group:
-                    return jsonify({target_group: full_schedule.get(target_group, [])})
-                return jsonify(full_schedule)
+            try:
+                with open(CACHE_FILE, 'r', encoding='utf-8') as f:
+                    full_schedule = json.load(f)
+                    if target_group:
+                        return jsonify({target_group: full_schedule.get(target_group, [])})
+                    return jsonify(full_schedule)
+            except:
+                pass # Если файл битый, идем дальше к ИИ
 
-    # 2. Если кэша нет или он старый — идем к Gemini 1.5 Flash
+    # 2. Запрос к ИИ
     try:
         pdf_text = get_pdf_text()
         
+        # Используем проверенное имя модели
         response = client.models.generate_content(
             model="gemini-1.5-flash", 
-            contents=[pdf_text],
+            contents=pdf_text,
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_INSTRUCTION,
                 temperature=0.1
             )
         )
         
-        # Очистка текста от лишних символов Markdown (```json ... ```)
-        clean_json = response.text.strip()
-        if "```json" in clean_json:
-            clean_json = clean_json.split("```json")[1].split("```")[0].strip()
-        elif "```" in clean_json:
-            clean_json = clean_json.split("```")[1].split("```")[0].strip()
+        # Чистим ответ от лишнего (Markdown кавычек)
+        raw_text = response.text.strip()
+        if "```json" in raw_text:
+            raw_text = raw_text.split("```json")[1].split("```")[0].strip()
+        elif "```" in raw_text:
+            raw_text = raw_text.split("```")[1].split("```")[0].strip()
             
-        full_schedule = json.loads(clean_json)
+        full_schedule = json.loads(raw_text)
         
-        # Сохраняем в кэш
+        # Сохраняем в кэш для экономии лимитов
         with open(CACHE_FILE, 'w', encoding='utf-8') as f:
             json.dump(full_schedule, f, ensure_ascii=False)
             
@@ -97,7 +94,11 @@ def get_schedule():
         return jsonify(full_schedule)
 
     except Exception as e:
-        return jsonify({"error": f"Ошибка: {str(e)}"}), 500
+        return jsonify({
+            "error": "Ошибка при обработке запроса",
+            "details": str(e),
+            "hint": "Проверьте API ключ и лимиты в Google AI Studio"
+        }), 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
