@@ -1,15 +1,20 @@
-
 import os
 import requests
 import pdfplumber
 import io
+import json
+import time
 from flask import Flask, request, jsonify
 from google import genai
 from google.genai import types
 
 app = Flask(__name__)
 
-# Настройка клиента Gemini (ключ возьмем из настроек сервера)
+# --- НАСТРОЙКИ КЭША ---
+CACHE_FILE = "schedule_cache.json"
+CACHE_TIME = 3600  # Данные хранятся 1 час (в секундах)
+
+# Настройка клиента Gemini
 client = genai.Client(
     api_key=os.environ.get("GEMINI_API_KEY"),
 )
@@ -20,7 +25,6 @@ SYSTEM_INSTRUCTION = """Ты — парсер расписания. Тебе б�
 Если данных нет — возвращай пустой список []. Не пиши ничего, кроме JSON."""
 
 def get_pdf_text():
-    # Ссылка на твой PDF (всегда свежий)
     url = "https://cloud.nntc.nnov.ru/index.php/s/fYpXD39YccFB5gM/download"
     response = requests.get(url)
     with pdfplumber.open(io.BytesIO(response.content)) as pdf:
@@ -33,33 +37,48 @@ def get_pdf_text():
 def get_schedule():
     target_group = request.args.get('group')
     
+    # 1. Проверяем, есть ли свежий кэш в памяти сервера
+    if os.path.exists(CACHE_FILE):
+        file_age = time.time() - os.path.getmtime(CACHE_FILE)
+        if file_age < CACHE_TIME:
+            print("--- Берем данные из кэша (лимиты не тратим) ---")
+            with open(CACHE_FILE, 'r', encoding='utf-8') as f:
+                full_schedule = json.load(f)
+                if target_group:
+                    return jsonify({target_group: full_schedule.get(target_group, [])})
+                return jsonify(full_schedule)
+
+    # 2. Если кэша нет или он старый (прошел час) — идем к Gemini
     try:
-        # 1. Получаем текст из PDF
+        print("--- Кэш устарел. Запрашиваем Gemini... ---")
         pdf_text = get_pdf_text()
         
-        # 2. Отправляем в Gemini (как ты делал в AI Studio)
         response = client.models.generate_content(
-            model="gemini-2.0-flash", # Или та версия, которая была в AI Studio
+            model="gemini-2.0-flash",
             contents=[pdf_text],
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_INSTRUCTION,
-                temperature=0.1 # Ставим низкую, чтобы ИИ не фантазировал
+                temperature=0.1
             )
         )
         
-        # 3. Превращаем текст ответа в настоящий JSON
-        import json
-        full_schedule = json.loads(response.text.replace('```json', '').replace('```', ''))
+        # Очищаем ответ от лишних символов (маркдаун ```json)
+        clean_json = response.text.replace('```json', '').replace('```', '').strip()
+        full_schedule = json.loads(clean_json)
         
-        # 4. Если пользователь просил конкретную группу - отдаем её, иначе всё сразу
+        # Сохраняем результат в файл для кэширования
+        with open(CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(full_schedule, f, ensure_ascii=False)
+            
         if target_group:
-            group_data = full_schedule.get(target_group, [])
-            return jsonify({target_group: group_data})
+            return jsonify({target_group: full_schedule.get(target_group, [])})
         
         return jsonify(full_schedule)
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": f"Ошибка сервера или лимитов: {str(e)}"}), 500
 
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
+    # На Render порт задается через переменную окружения PORT
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
