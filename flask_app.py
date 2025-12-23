@@ -4,7 +4,7 @@ import requests
 import io
 
 app = Flask(__name__)
-app.config['JSON_AS_ASCII'] = False 
+app.config['JSON_AS_ASCII'] = False # Это ДОЛЖНО исправить отображение в браузере
 
 PDF_URL = "https://cloud.nntc.nnov.ru/index.php/s/fYpXD39YccFB5gM/download"
 
@@ -18,38 +18,40 @@ def get_schedule():
         with pdfplumber.open(io.BytesIO(response.content)) as pdf:
             schedule = []
             for page in pdf.pages:
+                text = page.extract_text()
+                # Если в тексте страницы вообще нет твоей группы - скипаем
+                if group_target.lower() not in text.lower(): continue
+                
                 table = page.extract_table()
                 if not table: continue
                 
                 for row in table:
-                    # Чистим все ячейки в строке
+                    # Убираем пустые ячейки и склеиваем строку
                     r = [str(c).replace('\n', ' ').strip() for c in row if c]
-                    full_row_text = " ".join(r)
+                    row_str = " ".join(r)
                     
-                    if group_target.lower() in full_row_text.lower():
-                        # Простая логика: если в ячейке есть ":", это время. 
-                        # Если ячейка из 1-3 цифр — это кабинет или пара.
-                        time_val = next((x for x in r if ":" in x), "—")
-                        para_val = next((x for x in r if x.isdigit() and len(x) == 1), "—")
-                        aud_val = next((x for x in r if (x.isdigit() and len(x) > 1) or "каб" in x.lower()), "—")
-                        
-                        # Предмет — обычно самая длинная часть строки, которая не группа
-                        subj = "Замена"
-                        for x in r:
-                            if len(x) > 10 and group_target not in x:
-                                subj = x
-                                break
-
+                    if group_target.lower() in row_str.lower():
                         schedule.append({
                             "group": group_target,
-                            "para_num": para_val,
-                            "subject": subj,
-                            "teacher": "См. расписание",
-                            "aud": aud_val,
-                            "time": time_val
+                            "para_num": r[0] if len(r) > 0 else "—",
+                            "subject": r[1] if len(r) > 1 else "Предмет не найден",
+                            "teacher": r[2] if len(r) > 2 else "—",
+                            "aud": r[3] if len(r) > 3 else "—",
+                            "time": "По расп." 
                         })
             
-            return jsonify(schedule if schedule else [{"subject": "Замен нет", "time": "ОК"}])
+            # Если даже так пусто - выдаем тестовую строку, чтобы ты увидел ДИЗАЙН
+            if not schedule:
+                schedule = [{
+                    "group": group_target,
+                    "para_num": "1",
+                    "subject": "Тестовый предмет (Замен нет)",
+                    "teacher": "Преподаватель",
+                    "aud": "Каб",
+                    "time": "08:10"
+                }]
+                
+            return jsonify(schedule)
     except Exception as e:
         return jsonify([{"subject": "Ошибка: " + str(e)}])
 
