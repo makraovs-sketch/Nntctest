@@ -22,28 +22,34 @@ def get_schedule():
                 if not table: continue
                 
                 for row in table:
-                    # Чистим ячейки от лишних пробелов и переносов
-                    r = [str(c).replace('\n', ' ').strip() if c else "" for c in row]
+                    # Чистим все ячейки в строке
+                    r = [str(c).replace('\n', ' ').strip() for c in row if c]
+                    full_row_text = " ".join(r)
                     
-                    # Если в строке нашли номер твоей группы
-                    if group_target.lower() in " ".join(r).lower():
-                        # Пытаемся найти предмет (обычно самая длинная строка, но не название группы)
-                        potential_subject = ""
-                        for cell in r:
-                            if len(cell) > 5 and group_target not in cell:
-                                potential_subject = cell
-                                break
+                    if group_target.lower() in full_row_text.lower():
+                        # Простая логика: если в ячейке есть ":", это время. 
+                        # Если ячейка из 1-3 цифр — это кабинет или пара.
+                        time_val = next((x for x in r if ":" in x), "—")
+                        para_val = next((x for x in r if x.isdigit() and len(x) == 1), "—")
+                        aud_val = next((x for x in r if (x.isdigit() and len(x) > 1) or "каб" in x.lower()), "—")
                         
+                        # Предмет — обычно самая длинная часть строки, которая не группа
+                        subj = "Замена"
+                        for x in r:
+                            if len(x) > 10 and group_target not in x:
+                                subj = x
+                                break
+
                         schedule.append({
                             "group": group_target,
-                            "para_num": r[2] if len(r) > 2 and len(r[2]) < 3 else (r[0] if len(r[0]) < 3 else "—"),
-                            "subject": potential_subject if potential_subject else "Замена",
-                            "teacher": r[3] if len(r) > 3 and len(r[3]) > 3 else "—",
-                            "aud": r[5] if len(r) > 5 else (r[4] if "каб" in r[4].lower() or r[4].isdigit() else "—"),
-                            "time": r[4] if len(r) > 4 and ":" in r[4] else "—"
+                            "para_num": para_val,
+                            "subject": subj,
+                            "teacher": "См. расписание",
+                            "aud": aud_val,
+                            "time": time_val
                         })
             
-            return jsonify(schedule if schedule else [{"subject": "Замен не найдено"}])
+            return jsonify(schedule if schedule else [{"subject": "Замен нет", "time": "ОК"}])
     except Exception as e:
         return jsonify([{"subject": "Ошибка: " + str(e)}])
 
