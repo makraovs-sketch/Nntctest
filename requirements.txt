@@ -1,6 +1,5 @@
 flask
 requests
 pdfplumber
-google-generativeai
+google-genai
 gunicorn
-
