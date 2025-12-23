@@ -9,13 +9,15 @@ import google.generativeai as genai
 
 app = Flask(__name__)
 
-# Настройка API ключа из настроек Render
+# Настройка API
+# Обязательно добавьте GEMINI_API_KEY в Settings -> Environment на Render
 genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 
-# Самый стабильный способ выбора модели
+# Самое стабильное имя модели для текущего API
 model = genai.GenerativeModel('gemini-1.5-flash')
 
 def get_pdf_text():
+    """Скачивает и читает PDF файл"""
     url = "https://cloud.nntc.nnov.ru/index.php/s/fYpXD39YccFB5gM/download"
     response = requests.get(url, timeout=15)
     with pdfplumber.open(io.BytesIO(response.content)) as pdf:
@@ -28,27 +30,36 @@ def get_schedule():
     try:
         pdf_text = get_pdf_text()
         
-        # Инструкция прямо в запросе для надежности
-        prompt = f"Извлеки расписание для всех групп из этого текста и верни СТРОГО JSON: {pdf_text}"
+        # Четкая инструкция для ИИ
+        prompt = (
+            "Действуй как парсер расписания. Прочитай текст и найди замены для групп. "
+            "Выдай результат СТРОГО в формате JSON, где ключи - названия групп, "
+            "а значения - списки объектов с полями: para_num, subject, teacher, aud, time. "
+            f"Текст для анализа:\n{pdf_text}"
+        )
         
         response = model.generate_content(prompt)
         
-        # Очистка JSON от кавычек маркдауна
-        clean_json = response.text.strip()
-        if "```json" in clean_json:
-            clean_json = clean_json.split("```json")[1].split("```")[0].strip()
-        elif "```" in clean_json:
-            clean_json = clean_json.split("```")[1].split("```")[0].strip()
+        # Очистка ответа от лишних знаков
+        text_response = response.text.strip()
+        if "```json" in text_response:
+            text_response = text_response.split("```json")[1].split("```")[0].strip()
+        elif "```" in text_response:
+            text_response = text_response.split("```")[1].split("```")[0].strip()
             
-        full_schedule = json.loads(clean_json)
+        full_schedule = json.loads(text_response)
         
+        # Если группа указана - возвращаем только её, если нет - всё расписание
         if target_group:
             return jsonify({target_group: full_schedule.get(target_group, [])})
+        
         return jsonify(full_schedule)
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": str(e), "hint": "Проверьте лимиты и ключ в AI Studio"}), 500
 
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
+    # Запуск через встроенный сервер Flask для простоты
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
 
