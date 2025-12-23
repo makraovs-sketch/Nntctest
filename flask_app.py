@@ -1,11 +1,11 @@
-
 from flask import Flask, jsonify, request
 import pdfplumber
 import requests
 import io
 
 app = Flask(__name__)
-app.config['JSON_AS_ASCII'] = False # Чтобы в браузере был русский текст, а не коды
+# Чтобы в браузере сразу были русские буквы
+app.config['JSON_AS_ASCII'] = False 
 
 PDF_URL = "https://cloud.nntc.nnov.ru/index.php/s/fYpXD39YccFB5gM/download"
 
@@ -22,25 +22,33 @@ def get_schedule():
             for page in pdf.pages:
                 table = page.extract_table()
                 if not table: continue
+                
                 for row in table:
-                    # Чистим строку от пустых ячеек и переносов
+                    # Чистим данные от пустых ячеек и переносов строк
                     r = [str(c).replace('\n', ' ').strip() if c else "" for c in row]
-                    # Ищем группу (обычно она в 0 или 1 колонке)
+                    
+                    # Ищем строку, где упоминается ваша группа
                     if group_target.lower() in " ".join(r).lower():
-                        # Проверяем, что это не просто строка с названием группы, а строка с парой
-                        # Обычно в строке с парой заполнено поле с предметом (индекс 1 или 2)
-                        subject = r[1] if r[1] else r[2]
-                        if len(subject) > 5: # Если название предмета длинное, значит это пара
+                        # Проверяем, что это не пустая строка (обычно предмет в колонке 1 или 2)
+                        subject_name = r[1] if len(r) > 1 and len(r[1]) > 3 else r[2]
+                        
+                        if len(subject_name) > 3: # Если название предмета похоже на правду
                             schedule.append({
-                                "time": r[4] if len(r) > 4 and r[4] else "См. расп.",
-                                "subject": subject,
+                                "time": r[4] if len(r) > 4 and r[4] else "08:10",
+                                "subject": subject_name,
                                 "para": f"Пара {r[2]}" if r[2] and len(r[2]) < 3 else "Замена",
                                 "aud": r[3] if len(r) > 3 and r[3] else "—"
                             })
             
-            return jsonify(schedule if schedule else [{"subject": "Замен нет", "time": "OK"}])
+            # Если ничего не нашли
+            if not schedule:
+                return jsonify([{"subject": "Замен не обнаружено", "time": "ОК"}])
+                
+            return jsonify(schedule)
+            
     except Exception as e:
-        return jsonify([{"subject": "Ошибка", "time": "ERR"}])
+        return jsonify([{"subject": "Ошибка доступа к PDF", "time": "ERR"}])
 
 if __name__ == '__main__':
     app.run()
+
