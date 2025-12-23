@@ -9,7 +9,7 @@ app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False
 
 # Вставь сюда свой скопированный ключ из AI Studio
-genai.configure(api_key="AIzaSyBa0z34RJTWZaX5u84J2ElQM_uAsfcEMfY")
+genai.configure(api_key="AIzaSyBwN3ipsgLbnkv9hK-Le-vp1gns0TOqcsI")
 model = genai.GenerativeModel('gemini-1.5-flash')
 
 PDF_URL = "https://cloud.nntc.nnov.ru/index.php/s/fYpXD39YccFB5gM/download"
