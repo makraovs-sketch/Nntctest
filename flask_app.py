@@ -1,10 +1,10 @@
+
 from flask import Flask, jsonify, request
 import pdfplumber
 import requests
 import io
 
 app = Flask(__name__)
-# Чтобы в браузере сразу были русские буквы
 app.config['JSON_AS_ASCII'] = False 
 
 PDF_URL = "https://cloud.nntc.nnov.ru/index.php/s/fYpXD39YccFB5gM/download"
@@ -24,31 +24,29 @@ def get_schedule():
                 if not table: continue
                 
                 for row in table:
-                    # Чистим данные от пустых ячеек и переносов строк
+                    # Чистим ячейки
                     r = [str(c).replace('\n', ' ').strip() if c else "" for c in row]
                     
-                    # Ищем строку, где упоминается ваша группа
+                    # Ищем строку с твоей группой
                     if group_target.lower() in " ".join(r).lower():
-                        # Проверяем, что это не пустая строка (обычно предмет в колонке 1 или 2)
-                        subject_name = r[1] if len(r) > 1 and len(r[1]) > 3 else r[2]
-                        
-                        if len(subject_name) > 3: # Если название предмета похоже на правду
-                            schedule.append({
-                                "time": r[4] if len(r) > 4 and r[4] else "08:10",
-                                "subject": subject_name,
-                                "para": f"Пара {r[2]}" if r[2] and len(r[2]) < 3 else "Замена",
-                                "aud": r[3] if len(r) > 3 and r[3] else "—"
-                            })
+                        # Пытаемся вытащить данные по порядку
+                        schedule.append({
+                            "group": group_target,
+                            "para_num": r[2] if len(r) > 2 else "?",       # Номер пары (1, 2, 3...)
+                            "subject": r[1] if len(r) > 1 else "Замена",   # Предмет
+                            "teacher": r[3] if len(r) > 3 else "—",         # Преподаватель
+                            "aud": r[5] if len(r) > 5 and r[5] else "—",    # Кабинет
+                            "time": r[4] if len(r) > 4 and r[4] else "—"    # Время
+                        })
             
-            # Если ничего не нашли
+            # Если по группе пусто
             if not schedule:
-                return jsonify([{"subject": "Замен не обнаружено", "time": "ОК"}])
+                return jsonify([{"subject": "Замен не найдено", "group": group_target, "para_num": "-"}])
                 
             return jsonify(schedule)
             
     except Exception as e:
-        return jsonify([{"subject": "Ошибка доступа к PDF", "time": "ERR"}])
+        return jsonify([{"subject": "Ошибка доступа к PDF", "para_num": "!"}])
 
 if __name__ == '__main__':
     app.run()
-
