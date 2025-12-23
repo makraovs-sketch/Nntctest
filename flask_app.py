@@ -5,42 +5,26 @@ import io
 import json
 import time
 from flask import Flask, request, jsonify
-from google import genai
-from google.genai import types
+import google.generativeai as genai
 
 app = Flask(__name__)
 
 # --- НАСТРОЙКИ ---
 CACHE_FILE = "schedule_cache.json"
-CACHE_TIME = 3600  # Кэш на 1 час (3600 секунд)
+CACHE_TIME = 3600 
 
-# Инициализация клиента Gemini
-# Обязательно добавь переменную GEMINI_API_KEY в Settings -> Environment на Render
-client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+# Настройка API
+genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 
-SYSTEM_INSTRUCTION = """Ты — парсер расписания колледжа. 
-Тебе дан текст из PDF. Твоя задача: найти данные о заменах для ВСЕХ групп.
-Выдавай ответ СТРОГО в формате JSON.
-
-Формат:
-{
-  "Название Группы": [
-    {
-      "para_num": "номер пары",
-      "subject": "предмет и дата",
-      "teacher": "фамилия",
-      "aud": "кабинет",
-      "time": "время"
-    }
-  ]
-}
-
-Если замен нет, верни {}. Не пиши ничего, кроме JSON."""
+# Стабильный вызов модели
+model = genai.GenerativeModel(
+    model_name="gemini-1.5-flash",
+    system_instruction="Ты — парсер расписания. Выдавай СТРОГО JSON. Формат: {'Группа': [{'para_num': '1', 'subject': 'Математика', 'teacher': 'Иванов', 'aud': '101', 'time': '8:30'}]}"
+)
 
 def get_pdf_text():
-    """Скачивает PDF и извлекает текст"""
     url = "https://cloud.nntc.nnov.ru/index.php/s/fYpXD39YccFB5gM/download"
-    response = requests.get(url, timeout=10)
+    response = requests.get(url, timeout=15)
     with pdfplumber.open(io.BytesIO(response.content)) as pdf:
         return "\n".join([page.extract_text() for page in pdf.pages if page.extract_text()])
 
@@ -48,58 +32,33 @@ def get_pdf_text():
 def get_schedule():
     target_group = request.args.get('group')
     
-    # 1. Пробуем взять данные из кэша
+    # 1. Кэш
     if os.path.exists(CACHE_FILE):
-        file_age = time.time() - os.path.getmtime(CACHE_FILE)
-        if file_age < CACHE_TIME:
-            try:
-                with open(CACHE_FILE, 'r', encoding='utf-8') as f:
-                    full_schedule = json.load(f)
-                    if target_group:
-                        return jsonify({target_group: full_schedule.get(target_group, [])})
-                    return jsonify(full_schedule)
-            except:
-                pass # Если файл битый, идем дальше к ИИ
+        if (time.time() - os.path.getmtime(CACHE_FILE)) < CACHE_TIME:
+            with open(CACHE_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                return jsonify({target_group: data.get(target_group, [])} if target_group else data)
 
     # 2. Запрос к ИИ
     try:
-        pdf_text = get_pdf_text()
+        text = get_pdf_text()
+        response = model.generate_content(text)
         
-        # Используем проверенное имя модели
-        response = client.models.generate_content(
-            model="gemini-1.5-flash", 
-            contents=pdf_text,
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_INSTRUCTION,
-                temperature=0.1
-            )
-        )
+        # Чистим JSON
+        clean_json = response.text.strip()
+        if "```json" in clean_json:
+            clean_json = clean_json.split("```json")[1].split("```")[0].strip()
         
-        # Чистим ответ от лишнего (Markdown кавычек)
-        raw_text = response.text.strip()
-        if "```json" in raw_text:
-            raw_text = raw_text.split("```json")[1].split("```")[0].strip()
-        elif "```" in raw_text:
-            raw_text = raw_text.split("```")[1].split("```")[0].strip()
-            
-        full_schedule = json.loads(raw_text)
+        full_schedule = json.loads(clean_json)
         
-        # Сохраняем в кэш для экономии лимитов
         with open(CACHE_FILE, 'w', encoding='utf-8') as f:
             json.dump(full_schedule, f, ensure_ascii=False)
             
-        if target_group:
-            return jsonify({target_group: full_schedule.get(target_group, [])})
-        
-        return jsonify(full_schedule)
+        return jsonify({target_group: full_schedule.get(target_group, [])} if target_group else full_schedule)
 
     except Exception as e:
-        return jsonify({
-            "error": "Ошибка при обработке запроса",
-            "details": str(e),
-            "hint": "Проверьте API ключ и лимиты в Google AI Studio"
-        }), 500
+        return jsonify({"error": str(e), "hint": "Check API key or Model name"}), 500
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
+
