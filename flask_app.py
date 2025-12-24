@@ -3,133 +3,59 @@ import requests
 import pdfplumber
 import io
 import json
-import time
 from flask import Flask, request, jsonify
-import google.generativeai as genai
 
 app = Flask(__name__)
 
-# Принудительная настройка API
-API_KEY = os.environ.get("GEMINI_API_KEY")
-genai.configure(api_key=API_KEY)
-
-# Явное указание модели без лишних префиксов
-model = genai.GenerativeModel('gemini-1.5-flash')
-
 def get_pdf_text():
+    # Твоя ссылка на PDF (НРТК)
     url = "https://cloud.nntc.nnov.ru/index.php/s/fYpXD39YccFB5gM/download"
     response = requests.get(url, timeout=20)
     with pdfplumber.open(io.BytesIO(response.content)) as pdf:
-        text = ""
-        for page in pdf.pages:
-            content = page.extract_text()
-            if content:
-                text += content + "\n"
-        return text
+        return "\n".join([page.extract_text() for page in pdf.pages if page.extract_text()])
 
 @app.route('/get_schedule', methods=['GET'])
 def get_schedule():
     target_group = request.args.get('group')
+    api_key = os.environ.get("GEMINI_API_KEY")
     
     try:
         pdf_text = get_pdf_text()
-        if not pdf_text.strip():
-            return jsonify({"error": "PDF пустой или не читается"}), 400
-
-        # Очень короткий промпт, чтобы не грузить лимиты
-        prompt = f"Верни данные о заменах для групп из этого текста в формате JSON: {pdf_text}"
         
-        # Попытка генерации с явным указанием модели
-        response = model.generate_content(prompt)
+        # Прямой запрос к Google API без посредников
+        api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
         
-        # Очистка JSON
-        res_text = response.text.strip()
-        if "```json" in res_text:
-            res_text = res_text.split("```json")[1].split("```")[0].strip()
-        elif "```" in res_text:
-            res_text = res_text.split("```")[1].split("```")[0].strip()
+        payload = {
+            "contents": [{
+                "parts": [{
+                    "text": f"Извлеки расписание всех групп в JSON. Формат: {{'Группа': [{{'para_num': '1', 'subject': 'Урок', 'teacher': 'ФИО', 'aud': '101', 'time': '8:30'}}]}}. Текст: {pdf_text}"
+                }]
+            }]
+        }
+        
+        headers = {'Content-Type': 'application/json'}
+        response = requests.post(api_url, json=payload, headers=headers)
+        res_data = response.json()
+        
+        # Вытаскиваем текст из ответа Google
+        raw_text = res_data['candidates'][0]['content']['parts'][0]['text']
+        
+        # Чистим JSON от лишних символов
+        clean_json = raw_text.strip()
+        if "```json" in clean_json:
+            clean_json = clean_json.split("```json")[1].split("```")[0].strip()
+        elif "```" in clean_json:
+            clean_json = clean_json.split("```")[1].split("```")[0].strip()
             
-        data = json.loads(res_text)
+        full_schedule = json.loads(clean_json)
         
         if target_group:
-            return jsonify({target_group: data.get(target_group, [])})
-        return jsonify(data)
+            return jsonify({target_group: full_schedule.get(target_group, [])})
+        return jsonify(full_schedule)
 
     except Exception as e:
-        # Если снова 404, выведем список доступных моделей в лог
-        return jsonify({
-            "error": str(e),
-            "note": "Если видите 404, проверьте регион API ключа в AI Studio"
-        }), 500
+        return jsonify({"error": "Ошибка прямого запроса", "details": str(e)}), 500
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
-import os
-import requests
-import pdfplumber
-import io
-import json
-import time
-from flask import Flask, request, jsonify
-import google.generativeai as genai
-
-app = Flask(__name__)
-
-# Принудительная настройка API
-API_KEY = os.environ.get("GEMINI_API_KEY")
-genai.configure(api_key=API_KEY)
-
-# Явное указание модели без лишних префиксов
-model = genai.GenerativeModel('gemini-1.5-flash')
-
-def get_pdf_text():
-    url = "https://cloud.nntc.nnov.ru/index.php/s/fYpXD39YccFB5gM/download"
-    response = requests.get(url, timeout=20)
-    with pdfplumber.open(io.BytesIO(response.content)) as pdf:
-        text = ""
-        for page in pdf.pages:
-            content = page.extract_text()
-            if content:
-                text += content + "\n"
-        return text
-
-@app.route('/get_schedule', methods=['GET'])
-def get_schedule():
-    target_group = request.args.get('group')
-    
-    try:
-        pdf_text = get_pdf_text()
-        if not pdf_text.strip():
-            return jsonify({"error": "PDF пустой или не читается"}), 400
-
-        # Очень короткий промпт, чтобы не грузить лимиты
-        prompt = f"Верни данные о заменах для групп из этого текста в формате JSON: {pdf_text}"
-        
-        # Попытка генерации с явным указанием модели
-        response = model.generate_content(prompt)
-        
-        # Очистка JSON
-        res_text = response.text.strip()
-        if "```json" in res_text:
-            res_text = res_text.split("```json")[1].split("```")[0].strip()
-        elif "```" in res_text:
-            res_text = res_text.split("```")[1].split("```")[0].strip()
-            
-        data = json.loads(res_text)
-        
-        if target_group:
-            return jsonify({target_group: data.get(target_group, [])})
-        return jsonify(data)
-
-    except Exception as e:
-        # Если снова 404, выведем список доступных моделей в лог
-        return jsonify({
-            "error": str(e),
-            "note": "Если видите 404, проверьте регион API ключа в AI Studio"
-        }), 500
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
 
