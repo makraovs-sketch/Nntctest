@@ -2,18 +2,18 @@ name: Update Schedule
 
 on:
   schedule:
-    - cron: '0 5 * * *' # Запуск каждый день в 05:00 UTC (8:00 по МСК)
-  workflow_dispatch: # Добавляет кнопку для запуска вручную
+    - cron: '0 5 * * *' # Запуск в 8:00 по МСК
+  workflow_dispatch: # Кнопка для ручного запуска
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4 # Обновили с v3 на v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5 # Обновили с v4 на v5
         with:
           python-version: '3.9'
 
