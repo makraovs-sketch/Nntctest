@@ -1,61 +1,92 @@
-import pdfplumber
-import requests
-import json
 import re
 
-# === НАСТРОЙКИ ===
-SCRIPT_URL = "https://script.google.com/macros/s/AKfycbycecQjF9Di-MauPSkN54A2O_q-RUNYiOIlXj3aQmdff8jzwVyYsh66lMIn8UJJ9ihpcg/exec"
-FILE_NAME = "schedule.pdf" # Файл должен лежать в репозитории с таким именем
-
-def parse_schedule():
-    results = []
-    group_pattern = re.compile(r'(\d[А-ЯA-Z]{2,5}-\d{2}-\d{1,2}к?)')
-    room_pattern = re.compile(r'(\d{3}\b|актовый зал|ук км|2 площадка|с/з|каб\.\s*\d+)')
-
-    print(f"--- Чтение локального файла {FILE_NAME} ---")
-    try:
-        with pdfplumber.open(FILE_NAME) as pdf:
-            for page in pdf.pages:
-                text = page.extract_text()
-                if not text: continue
-                
-                lines = text.split('\n')
-                current_group = None
-                
-                for line in lines:
-                    group_match = group_pattern.search(line)
-                    if group_match:
-                        current_group = group_match.group(1)
-                    
-                    room_match = room_pattern.search(line.lower())
-                    if room_match and current_group:
-                        room_id = room_match.group(1).upper()
-                        clean_room = room_id.replace('КАБ.', '').strip()
-                        
-                        results.append({
-                            "id": clean_room,
-                            "subject": current_group,
-                            "teacher": line.strip()[:50]
-                        })
-    except Exception as e:
-        print(f"Ошибка при открытии PDF: {e}")
-        return None
-
-    unique_data = {f"{r['id']}{r['subject']}": r for r in results}.values()
-    return list(unique_data)
-
-if __name__ == "__main__":
-    data = parse_schedule()
-    if data and len(data) > 0:
-        print(f"Найдено записей: {len(data)}. Отправляю в Google...")
-        try:
-            response = requests.post(
-                SCRIPT_URL, 
-                data=json.dumps(data),
-                headers={'Content-Type': 'application/json'}
-            )
-            print(f"Ответ таблицы: {response.text}")
-        except Exception as e:
-            print(f"Ошибка отправки: {e}")
+def clean_data(raw_line, group_name):
+    """
+    Очистка и парсинг строки с расписанием.
+    
+    Args:
+        raw_line: строка из PDF
+        group_name: название группы
+    
+    Returns:
+        dict: словарь с полями course, group, teacher, subject, room
+    """
+    # 1. Извлекаем кабинет (3 цифры или спец. обозначения)
+    room_pattern = re.compile(
+        r'(\b\d{3}\b|актовый зал|актовый\s+зал|с/з|ук\s+км|2\s+площадка|каб\.?\s*\d{3})',
+        re.IGNORECASE
+    )
+    room_match = room_pattern.search(raw_line.lower())
+    room = room_match.group(1).upper() if room_match else "НЕ УКАЗАН"
+    
+    # Чистим номер кабинета от лишних слов
+    room = re.sub(r'КАБ\.?\s*', '', room).strip()
+    
+    # 2. Извлекаем преподавателя (Фамилия И.О. или И.О. Фамилия)
+    teacher_pattern = re.compile(
+        r'([А-Я][а-я]+\s[А-Я]\.[А-Я]\.)|([А-Я]\.[А-Я]\.\s[А-Я][а-я]+)'
+    )
+    teacher_match = teacher_pattern.search(raw_line)
+    teacher = teacher_match.group(0) if teacher_match else "Не указан"
+    
+    # 3. Извлекаем предмет (всё, что осталось после удаления кабинета и препода)
+    subject = raw_line
+    
+    # Удаляем кабинет
+    if room_match:
+        subject = re.sub(room_pattern, '', subject, flags=re.IGNORECASE)
+    
+    # Удаляем преподавателя
+    if teacher_match:
+        subject = subject.replace(teacher_match.group(0), '')
+    
+    # Удаляем группу (если она есть в строке)
+    subject = subject.replace(group_name, '')
+    
+    # Чистим лишние символы
+    subject = re.sub(r'[-–—]\s*$', '', subject)  # тире в конце
+    subject = re.sub(r'^\s*[-–—]\s*', '', subject)  # тире в начале
+    subject = re.sub(r'\s+', ' ', subject)  # множественные пробелы
+    subject = subject.strip(' -–—,;')
+    
+    # Если предмет пустой — подставляем "Дисциплина"
+    if not subject:
+        subject = "Дисциплина"
+    
+    # 4. Определяем курс по первой цифре группы
+    course = group_name[0] if group_name and group_name[0].isdigit() else "1"
+    
+    # Дополнительная проверка: если группа начинается с 1-4, берем эту цифру
+    if course in ['1', '2', '3', '4']:
+        course = course
     else:
-        print("Данные не найдены. Проверь имя файла и содержимое.")
+        # Если первая цифра не 1-4, пытаемся найти курс в названии
+        course_match = re.search(r'[1-4]', group_name)
+        course = course_match.group(0) if course_match else "1"
+    
+    return {
+        "course": int(course),  # возвращаем как int
+        "group": group_name,
+        "teacher": teacher,
+        "subject": subject,
+        "room": room
+    }
+
+
+# Пример использования
+if __name__ == "__main__":
+    test_cases = [
+        ("213 Иванов И.И. Математика", "1ИСИП-25-1"),
+        ("Актовый зал Петрова А.А. Литература", "2РЭУС-24-2"),
+        ("с/з Сидоров С.С. Физика", "3ТОР-23-1к"),
+        ("ук км", "4СЭЗС-22-2"),
+    ]
+    
+    for line, group in test_cases:
+        result = clean_data(line, group)
+        print(f"Группа: {result['group']}")
+        print(f"  Курс: {result['course']}")
+        print(f"  Кабинет: {result['room']}")
+        print(f"  Преподаватель: {result['teacher']}")
+        print(f"  Предмет: {result['subject']}")
+        print()
