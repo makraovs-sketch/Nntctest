@@ -1,0 +1,25 @@
+name: Update Schedule
+
+on:
+  schedule:
+    - cron: '0 5 * * *' # Запуск каждый день в 05:00 UTC (8:00 по МСК)
+  workflow_dispatch: # Добавляет кнопку для запуска вручную
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install pdfplumber requests
+
+      - name: Run parser
+        run: python parser.py
